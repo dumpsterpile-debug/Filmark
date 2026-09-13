@@ -1,0 +1,3 @@
+# 元数据 JSON 放这里（本机媒体库数据，已被 .gitignore 忽略，不入库）。
+# 保留本文件是为了让 fresh clone 也存在该目录 —— electron-builder 的
+# extraResources 以 src/public 为来源，目录缺失会让 npm run dist 失败。

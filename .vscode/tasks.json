@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "vitest-metadata-source",
+      "type": "shell",
+      "command": "node node_modules/vitest/vitest.mjs",
+      "args": ["run", "src/shared/__tests__/metadataSource.test.ts"],
+      "problemMatcher": [],
+      "group": "test"
+    }
+  ]
+}

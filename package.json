@@ -1,0 +1,118 @@
+{
+  "name": "filmark",
+  "version": "1.0.0",
+  "description": "Local-first video library and player",
+  "main": "./out/main/index.js",
+  "author": "Dumpsterpile",
+  "license": "MIT",
+  "packageManager": "npm@11.12.1",
+  "engines": {
+    "node": ">=24.15.0 <25",
+    "npm": ">=11.12.1 <12"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "dist": "npm run build && electron-builder --win && npm run verify:build -- --strict",
+    "verify:build": "node scripts/verify-build.mjs",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "qa:shots": "electron-vite build && electron-vite preview",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "6.3.1",
+    "@dnd-kit/sortable": "8.0.0",
+    "@dnd-kit/utilities": "3.2.2",
+    "ffmpeg-static": "5.3.0",
+    "fluent-ffmpeg": "2.1.3",
+    "fuse.js": "7.5.0",
+    "i18next": "26.4.2",
+    "lucide-react": "0.454.0",
+    "oxlint": "1.82.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-i18next": "17.0.13",
+    "react-player": "2.16.1",
+    "react-router-dom": "7.18.3",
+    "zustand": "4.5.7"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.7",
+    "@types/fluent-ffmpeg": "2.1.28",
+    "@types/node": "26.5.1",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@vitejs/plugin-react": "4.7.0",
+    "electron": "39.8.10",
+    "electron-builder": "26.15.3",
+    "electron-vite": "5.0.0",
+    "husky": "9.1.7",
+    "jsdom": "30.0.1",
+    "lint-staged": "17.5.1",
+    "prettier": "3.9.6",
+    "typescript": "7.0.2",
+    "vite": "7.3.6",
+    "vitest": "4.1.11"
+  },
+  "build": {
+    "appId": "io.github.dumpsterpile-debug.filmark",
+    "productName": "Filmark",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**",
+      "!out/main/qaShots*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/ffmpeg-static/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "src/public",
+        "to": "public"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Filmark",
+      "artifactName": "${name}-setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "${name}-portable-${version}.${ext}"
+    }
+  }
+}

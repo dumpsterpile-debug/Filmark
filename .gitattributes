@@ -1,0 +1,10 @@
+# 统一以 LF 存储与检出，与 .editorconfig (end_of_line = lf) 保持一致。
+# 缺少本文件时 core.autocrlf=true 会把检出结果变成 CRLF，
+# 导致 prettier / lint-staged 在每个文件上都报行尾不一致。
+* text=auto eol=lf
+
+# 二进制资源不参与行尾转换
+*.ico binary
+*.png binary
+*.asar binary
+*.exe binary
