@@ -1,3 +1,4 @@
+import type { ExtractResult } from "./siteAdapters";
 import type { DownloadMeta, DownloadRequest } from "./types";
 
 export interface ScrapedPage {
@@ -38,15 +39,25 @@ export function parseVideoId(pathname: string): string {
   return m?.[1] ?? "";
 }
 
+/** 常见媒体扩展名：标题已经带了就不再多加一个 */
+const MEDIA_EXTENSION = /\.(mp4|m4v|webm|mkv|mov|avi|flv|wmv|ts|mp3|m4a)$/i;
+
 /**
  * 解析下载文件名与扩展名。
- * 优先级：download 查询参数 > 视频 id > `fallbackName`（主进程给出的原始文件名）
- * > URL 末段路径（媒体直链通常就是文件名）> "download.mp4"。
+ * 优先级：download 查询参数 > 视频 id > `titleHint`（页面标题 / 站点提取结果）
+ * > `fallbackName`（主进程给出的原始文件名）> URL 末段路径（媒体直链通常就是文件名）
+ * > "download.mp4"。
+ *
+ * `titleHint` 排在原始文件名之前，是因为媒体直链的末段（`1080P_4000K_1.mp4` 这类
+ * CDN 产物）对用户没有意义，而页面标题才是用户认得出的名字 —— 用户脚本里
+ * `sanitizeTitle()` 起的就是这个作用。标题一般不带扩展名，故用直链的扩展名补上，
+ * 否则落盘的会是一个没有扩展名的文件。
  */
 export function parseDownloadFilename(
   href: string,
   pathname: string,
-  fallbackName?: string
+  fallbackName?: string,
+  titleHint?: string
 ): { fileName: string; baseName: string; extension: string } {
   let name = "";
   try {
@@ -60,6 +71,10 @@ export function parseDownloadFilename(
     const id = parseVideoId(pathname);
     if (id) name = `${id}.mp4`;
   }
+  if (!name && titleHint?.trim()) {
+    const hint = titleHint.trim();
+    name = MEDIA_EXTENSION.test(hint) ? hint : hint + urlExtensionSuffix(href);
+  }
   if (!name && fallbackName?.trim()) name = fallbackName.trim();
   if (!name) {
     try {
@@ -72,6 +87,44 @@ export function parseDownloadFilename(
   if (!name) name = "download.mp4";
   const split = splitFileName(name);
   return { fileName: sanitizeFileName(name), ...split };
+}
+
+/** URL 末段的扩展名（含点，如 ".mp4"）；取不到返回空串 */
+function urlExtensionSuffix(href: string): string {
+  try {
+    const segments = new URL(href).pathname.split("/").filter(Boolean);
+    const extension = splitFileName(
+      decodeURIComponent(segments[segments.length - 1] ?? "")
+    ).extension;
+    return extension ? `.${extension}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * 合并「站点提取结果」与「页面抓取结果」，作为元数据弹窗的预填输入。
+ *
+ * 提取结果优先：它按站点策略解析，标题来自播放器配置（比 og:title 更干净）、封面与标签
+ * 也更贴近真实内容，而且面板已经抓过一次。抓取结果负责补齐它没有的字段
+ * （出演者、video_id、URL 等），因此两种来源任缺一个都仍然可用。
+ */
+export function mergeScrapedPage(
+  scraped: ScrapedPage,
+  media: ExtractResult | null | undefined
+): ScrapedPage {
+  if (!media) return scraped;
+  const title = media.title.trim();
+  const tags = (media.tags ?? []).map((tag) => tag.trim()).filter(Boolean);
+  const artist = (media.artist ?? "").trim();
+  const poster = (media.poster ?? "").trim();
+  return {
+    ...scraped,
+    title: title || scraped.title,
+    tags: tags.length > 0 ? tags : scraped.tags,
+    artist: artist ? [artist] : scraped.artist,
+    posterStyle: poster ? `url("${poster}")` : scraped.posterStyle,
+  };
 }
 
 export function splitFileName(fileName: string): { baseName: string; extension: string } {

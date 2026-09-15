@@ -55,6 +55,17 @@ UI 中的一个可播放条目。来自 `normalizeVideos()`（`src/shared/videos
 （只登记域名策略、不挂提取面板，例如 iwara）。
 执行方式见 [ADR-0004](docs/adr/0004-extractor-serialization.md)。
 
+**Extract result / 提取结果**
+一次提取的产出（`ExtractResult`）：标题、封面、标签与可下载媒体列表。
+提取面板扫完写进 store 的 `extractResult`，**元数据弹窗读同一份** ——
+「从面板点下载」与「弹窗预填」于是共用同一份页面事实，不必各抓一遍。
+
+**Quality list / 分辨率清单**
+Pornhub 的 `mediaDefinitions` 中 `remote: true` 那条指向的 JSON 端点，
+返回 `[{ quality, format, videoUrl }]`，是**全部分辨率的唯一来源**：
+行内脚本只列了播放器当前用的那几条，故提取时要真的去拉一次
+（在访客页上下文里同步 XHR）。
+
 **Media host / 媒体域名**
 媒体文件或封面所在的 CDN 域名。**只能放媒体域名，不能放普通页面域名** ——
 `decideDownload` 的调用方包含 webview 的 `will-navigate`，

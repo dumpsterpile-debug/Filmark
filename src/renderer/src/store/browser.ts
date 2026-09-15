@@ -1,4 +1,5 @@
 import type { DownloadMeta, DownloadProgress, DownloadRequest } from "@shared/types";
+import type { ExtractResult } from "@shared/siteAdapters";
 import { isValidHttpUrl } from "@shared/browser";
 import i18n from "@/i18n";
 import { getApi } from "@/lib/api";
@@ -9,6 +10,13 @@ export interface BrowserSlice {
   defaultWebUrl: string;
   downloadPath: string;
   siteExtractEnabled: boolean;
+  /**
+   * 当前页面最近一次站点提取结果 —— 提取面板写入，元数据弹窗读取。
+   *
+   * 一次提取同时服务两处：面板据此列出可下载媒体，弹窗据此预填标题 / 封面 / 标签，
+   * 于是「从面板点下载」与「元数据表单」共用同一份页面事实，不必各抓一遍。
+   */
+  extractResult: ExtractResult | null;
   downloadRequest: DownloadRequest | null;
   downloadProgress: DownloadProgress | null;
 
@@ -17,6 +25,7 @@ export interface BrowserSlice {
   setDownloadPath: (path: string) => void;
   resetDownloadPath: () => void;
   setSiteExtractEnabled: (enabled: boolean) => void;
+  setExtractResult: (result: ExtractResult | null) => void;
   confirmDownload: (meta: DownloadMeta) => Promise<void>;
   cancelDownload: () => void;
   /** 绑定主进程的下载事件；重复调用先解绑再绑定，不会叠加监听 */
@@ -35,6 +44,7 @@ export const createBrowserSlice: SliceCreator<BrowserSlice> = (set, get) => ({
   defaultWebUrl: "",
   downloadPath: "",
   siteExtractEnabled: true,
+  extractResult: null,
   downloadRequest: null,
   downloadProgress: null,
 
@@ -65,6 +75,8 @@ export const createBrowserSlice: SliceCreator<BrowserSlice> = (set, get) => ({
   },
 
   setSiteExtractEnabled: (enabled) => set({ siteExtractEnabled: enabled }),
+
+  setExtractResult: (result) => set({ extractResult: result }),
 
   confirmDownload: async (meta) => {
     const { downloadRequest, downloadPath, defaultMetadataPath, metadataPath } = get();

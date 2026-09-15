@@ -82,6 +82,16 @@ describe("BrowserExtractPanel", () => {
     expect(screen.getByText("(2)")).toBeInTheDocument();
   });
 
+  it("publishes the result for the metadata form to prefill from", async () => {
+    renderPanel();
+
+    expect(await screen.findByText("Panel Title")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(useAppStore.getState().extractResult?.title).toBe("Panel Title");
+    });
+    expect(useAppStore.getState().extractResult?.sources).toHaveLength(2);
+  });
+
   it("copies, downloads and opens a progressive source", async () => {
     renderPanel();
     const row = (await screen.findByText("1080p MP4")).closest(

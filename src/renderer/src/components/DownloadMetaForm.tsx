@@ -3,7 +3,12 @@ import { Download, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { buildFacets } from "@/lib/search";
 import { scrapePage } from "@/lib/pageScraper";
-import { parseDownloadFilename, scrapeToMeta, type DownloadMeta } from "@shared/download";
+import {
+  parseDownloadFilename,
+  mergeScrapedPage,
+  scrapeToMeta,
+  type DownloadMeta,
+} from "@shared/download";
 import { useAppStore } from "@/store/useAppStore";
 import ChipInput from "@/components/ChipInput";
 
@@ -38,7 +43,11 @@ export default function DownloadMetaForm({
       setMeta(null);
       return;
     }
-    const prefs = useAppStore.getState().perArtistPrefs;
+    const downloadId = request.downloadId;
+    const state = useAppStore.getState();
+    const prefs = state.perArtistPrefs;
+    // 提取面板已经扫过同一页：它的结果优先于本组件再抓一遍页面
+    const media = state.extractResult;
     const prefilled = scrapeToMeta({
       scraped: {
         artist: [],
@@ -56,15 +65,19 @@ export default function DownloadMetaForm({
     setMeta(prefilled);
     if (webview) {
       void scrapePage(webview).then((scraped) => {
+        // 用户可能已经取消 / 换了一次下载，别用旧结果覆盖新表单
+        if (useAppStore.getState().downloadRequest?.downloadId !== downloadId) return;
+        const page = mergeScrapedPage(scraped, media);
         const parsed = parseDownloadFilename(
           request.url,
-          scraped.url || request.url,
-          request.fileName
+          page.url || request.url,
+          request.fileName,
+          page.title
         );
         const next = scrapeToMeta({
-          scraped: { ...scraped, fileName: parsed.fileName, extension: parsed.extension },
+          scraped: { ...page, fileName: parsed.fileName, extension: parsed.extension },
           request,
-          prefs: prefs[scraped.artist[0] ?? ""] ?? undefined,
+          prefs: prefs[page.artist[0] ?? ""] ?? undefined,
         });
         setMeta(next);
       });

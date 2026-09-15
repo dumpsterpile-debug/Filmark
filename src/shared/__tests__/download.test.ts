@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isDownloadUrl,
+  mergeScrapedPage,
   parseDownloadFilename,
   parseVideoId,
   sanitizeFileName,
@@ -66,6 +67,47 @@ describe("parseDownloadFilename", () => {
     );
     expect(result.fileName).toBe("1080P_4000K_1.mp4");
     expect(result.extension).toBe("mp4");
+  });
+
+  it("prefers the page title over the raw media filename and back-fills the extension", () => {
+    const result = parseDownloadFilename(
+      "https://ev-h.phncdn.com/videos/abc/1080P_4000K_1.mp4",
+      "https://www.pornhub.com/view_video.php?viewkey=abc",
+      "1080P_4000K_1.mp4",
+      "My Clip: Part 1"
+    );
+    // 标题里的非法字符与用户脚本的 sanitizeTitle() 一样被替换掉
+    expect(result.fileName).toBe("My Clip_ Part 1.mp4");
+    expect(result.extension).toBe("mp4");
+  });
+
+  it("keeps an extension the title already carries", () => {
+    const result = parseDownloadFilename(
+      "https://cdn.example/video/stream",
+      "https://example.com/watch",
+      "stream.bin",
+      "clip.webm"
+    );
+    expect(result.fileName).toBe("clip.webm");
+    expect(result.extension).toBe("webm");
+  });
+
+  it("still lets the download param and the video id win over the title", () => {
+    const fromParam = parseDownloadFilename(
+      "https://www.iwara.tv/download/abc?download=Iwara%20-%20ECHO.mp4",
+      "/video/zkgwZnoNtSwgd2/echo",
+      "raw.bin",
+      "Page Title"
+    );
+    expect(fromParam.fileName).toBe("Iwara - ECHO.mp4");
+
+    const fromId = parseDownloadFilename(
+      "https://www.iwara.tv/download/abc",
+      "/video/zkgwZnoNtSwgd2/echo",
+      "raw.bin",
+      "Page Title"
+    );
+    expect(fromId.fileName).toBe("zkgwZnoNtSwgd2.mp4");
   });
 });
 
@@ -141,5 +183,64 @@ describe("scrapeToMeta", () => {
     expect(meta.extension).toBe("webm");
     expect(meta.genre).toBe("");
     expect(meta.character).toEqual([]);
+  });
+});
+
+describe("mergeScrapedPage", () => {
+  const scraped = {
+    artist: ["site author"],
+    tags: ["scraped tag"],
+    title: "Scraped Title",
+    videoId: "abc",
+    url: "https://www.pornhub.com/view_video.php?viewkey=abc",
+    fileName: "",
+    extension: "",
+    posterStyle: 'url("https://ci.phncdn.com/og.jpg")',
+  };
+
+  it("lets the extraction result win and keeps the scraped fallbacks", () => {
+    const merged = mergeScrapedPage(scraped, {
+      adapterId: "pornhub",
+      pageUrl: scraped.url,
+      title: "Extracted Title",
+      tags: ["tag one", "tag two"],
+      poster: "https://ci.phncdn.com/1.jpg",
+      sources: [],
+    });
+
+    expect(merged.title).toBe("Extracted Title");
+    expect(merged.tags).toEqual(["tag one", "tag two"]);
+    expect(merged.posterStyle).toBe('url("https://ci.phncdn.com/1.jpg")');
+    // 提取结果没提供的字段由页面抓取补齐
+    expect(merged.artist).toEqual(["site author"]);
+    expect(merged.videoId).toBe("abc");
+  });
+
+  it("uses the extraction artist when the strategy provides one", () => {
+    const merged = mergeScrapedPage(scraped, {
+      adapterId: "generic",
+      pageUrl: scraped.url,
+      title: "",
+      artist: "Extracted Author",
+      sources: [],
+    });
+    expect(merged.artist).toEqual(["Extracted Author"]);
+    expect(merged.title).toBe("Scraped Title");
+  });
+
+  it("returns the scraped page untouched without an extraction result", () => {
+    expect(mergeScrapedPage(scraped, null)).toBe(scraped);
+
+    const empty = mergeScrapedPage(scraped, {
+      adapterId: "generic",
+      pageUrl: "",
+      title: "   ",
+      tags: ["  "],
+      poster: "",
+      sources: [],
+    });
+    expect(empty.title).toBe("Scraped Title");
+    expect(empty.tags).toEqual(["scraped tag"]);
+    expect(empty.posterStyle).toBe('url("https://ci.phncdn.com/og.jpg")');
   });
 });

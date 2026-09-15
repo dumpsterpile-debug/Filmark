@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtractResult, ExtractStrategyId } from "@shared/siteAdapters";
 import { extractGeneric, extractPornhub, extractXhamster } from "../adapters";
 import { buildExtractScript, normalizeExtractResult, runExtraction } from "../index";
@@ -29,6 +29,17 @@ var flashvars_123 = {"video_title":"PH Title","mediaDefinitions":[
 </body></html>
 `;
 
+/** flashvars 带 remote 分辨率清单的形态（用户脚本正是靠它拿到全部分辨率） */
+const PORNHUB_REMOTE_HTML = `
+<html><head><title>PH</title></head><body>
+<script>
+var flashvars_123 = {"video_title":"PH Remote","image_url":"\\/\\/ci.phncdn.com\\/videos\\/abc\\/1.jpg","mediaDefinitions":[
+ {"format":"mp4","videoUrl":"https:\\/\\/ev-h.phncdn.com\\/videos\\/abc\\/preview_240p.mp4"},
+ {"remote":true,"videoUrl":"https:\\/\\/ev-h.phncdn.com\\/videos\\/abc\\/master.json"}]};
+</script>
+</body></html>
+`;
+
 const XHAMSTER_HTML = `
 <html><head><title>XH</title></head><body>
 <script id="initials-script">
@@ -45,6 +56,27 @@ function parseHtml(html: string): Document {
   return doc;
 }
 
+/** remote 分辨率清单端点的固定响应 */
+const QUALITY_LIST = [
+  { quality: "1080", format: "mp4", videoUrl: "https://ev-h.phncdn.com/videos/abc/1080P.mp4" },
+  { quality: "720", format: "mp4", videoUrl: "https://ev-h.phncdn.com/videos/abc/720P.mp4" },
+  { quality: "auto", format: "hls", videoUrl: "https://ev-h.phncdn.com/videos/abc/master.m3u8" },
+];
+
+/** 被拉取的清单地址 */
+const requested: string[] = [];
+
+class FakeXhr {
+  status = 200;
+  responseText = JSON.stringify(QUALITY_LIST);
+  open(_method: string, requestUrl: string): void {
+    requested.push(requestUrl);
+  }
+  send(): void {
+    /* 上面那份固定响应 */
+  }
+}
+
 function runInjectedScript(strategy: ExtractStrategyId, url: string): ExtractResult {
   const script = buildExtractScript(strategy, url);
   // 用 Function 而非 eval：模拟注入到访客页全局作用域执行（那正是这个规则想防住的语义，此处是有意豁免）
@@ -52,7 +84,14 @@ function runInjectedScript(strategy: ExtractStrategyId, url: string): ExtractRes
   return new Function(`return ${script}`)() as ExtractResult;
 }
 
+beforeEach(() => {
+  // 提取会在访客页上下文里同步 XHR 拉分辨率清单；这里换成固定响应，顺带钉住「到底拉了什么」
+  requested.length = 0;
+  vi.stubGlobal("XMLHttpRequest", FakeXhr);
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
   document.body.innerHTML = "";
 });
 
@@ -102,6 +141,49 @@ describe("extractPornhub", () => {
     ]);
     expect(progressive[0]?.quality).toBe("1080p");
     expect(result.sources.some((s) => s.kind === "hls")).toBe(true);
+  });
+
+  it("does not hit the network when no remote endpoint is advertised", () => {
+    // 页面没有 remote 端点时不发同步 XHR —— 提取会被轮询多次，白拉一次很贵
+    expect(requested).toEqual([]);
+  });
+});
+
+describe("extractPornhub remote quality list", () => {
+  const url = "https://www.pornhub.com/view_video.php?viewkey=abc";
+
+  it("pulls every resolution from the remote endpoint", () => {
+    const result = extractPornhub(parseHtml(PORNHUB_REMOTE_HTML), url);
+    const progressive = result.sources.filter((s) => s.kind === "progressive");
+
+    // 行内那条直链仍然保留；清单里的分辨率按高低排在其后
+    expect(progressive.map((s) => s.url)).toEqual([
+      "https://ev-h.phncdn.com/videos/abc/1080P.mp4",
+      "https://ev-h.phncdn.com/videos/abc/720P.mp4",
+      "https://ev-h.phncdn.com/videos/abc/preview_240p.mp4",
+    ]);
+    expect(progressive.map((s) => s.quality)).toEqual(["1080p", "720p", "240p"]);
+    expect(progressive[0]?.label).toBe("1080p MP4");
+
+    const hls = result.sources.filter((s) => s.kind === "hls");
+    expect(hls.map((s) => s.url)).toEqual(["https://ev-h.phncdn.com/videos/abc/master.m3u8"]);
+
+    // 清单端点只在页面上下文里拉一次，且用的是页面给出的地址
+    expect(requested).toEqual(["https://ev-h.phncdn.com/videos/abc/master.json"]);
+  });
+
+  it("reads the poster from the flashvars image_url", () => {
+    const result = extractPornhub(parseHtml(PORNHUB_REMOTE_HTML), url);
+    expect(result.poster).toBe("https://ci.phncdn.com/videos/abc/1.jpg");
+    expect(result.title).toBe("PH Remote");
+  });
+
+  it("falls back to inline literals when the endpoint is unreachable", () => {
+    vi.stubGlobal("XMLHttpRequest", undefined);
+    const result = extractPornhub(parseHtml(PORNHUB_REMOTE_HTML), url);
+    expect(result.sources.map((s) => s.url)).toEqual([
+      "https://ev-h.phncdn.com/videos/abc/preview_240p.mp4",
+    ]);
   });
 });
 

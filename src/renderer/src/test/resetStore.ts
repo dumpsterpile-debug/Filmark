@@ -38,6 +38,7 @@ const CLEAN: Partial<AppState> = {
   importsList: [],
   downloadRequest: null,
   downloadProgress: null,
+  extractResult: null,
   criteria: blankCriteria(),
   draft: blankDraft(),
   advancedOpen: false,

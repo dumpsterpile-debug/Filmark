@@ -28,7 +28,8 @@ interface BrowserExtractPanelProps {
 
 /**
  * 站点媒体提取面板：宿主层渲染（webview 之外），提取逻辑注入访客页执行。
- * 下载统一走既有 will-download 拦截 -> 元数据弹窗 -> 进度条链路。
+ * 下载统一走既有 will-download 拦截 -> 元数据弹窗 -> 进度条链路；
+ * 扫描结果同时写进 store 的 `extractResult`，供元数据弹窗预填（两者共用一次提取）。
  */
 export default function BrowserExtractPanel({
   webview,
@@ -38,6 +39,7 @@ export default function BrowserExtractPanel({
 }: BrowserExtractPanelProps): JSX.Element | null {
   const { t } = useTranslation();
   const toast = useAppStore((s) => s.toast);
+  const setExtractResult = useAppStore((s) => s.setExtractResult);
   const [result, setResult] = useState<ExtractResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState(true);
@@ -54,19 +56,26 @@ export default function BrowserExtractPanel({
     const next = await runExtraction(webview, adapter.strategy, pageUrl);
     if (requestRef.current !== requestId) return;
     setResult(next);
+    // 交给元数据弹窗的那一份：页面导航时由下面的 effect 负责清空
+    setExtractResult(next);
     setLoading(false);
-  }, [adapter, enabled, pageUrl, webview]);
+  }, [adapter, enabled, pageUrl, setExtractResult, webview]);
 
   useEffect(() => {
     if (!active) {
       requestRef.current += 1;
       setResult(null);
       setLoading(false);
+      setExtractResult(null);
       return;
     }
     setResult(null);
+    setExtractResult(null);
     void scan();
-  }, [active, scan]);
+  }, [active, scan, setExtractResult]);
+
+  /** 离开浏览器页后不该再有「当前页」的提取结果 */
+  useEffect(() => () => setExtractResult(null), [setExtractResult]);
 
   const copyUrl = useCallback(
     async (source: ExtractedSource) => {

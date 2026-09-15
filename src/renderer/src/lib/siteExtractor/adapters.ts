@@ -6,7 +6,8 @@ import type { ExtractResult, ExtractedSource, SourceKind } from "@shared/siteAda
  * ⚠️ 约束：这些函数会被 `Function.prototype.toString()` 序列化后注入 webview 访客页执行，
  * 因此**不得**引用模块作用域变量、不得 import 任何运行时依赖，只能使用参数与标准 DOM/URL API。
  * 序列化时 helper 会与所选 extractor 一起按声明顺序拼接，故彼此可以按名字相互调用。
- * 参考实现：scripts/ph-downloader.js（MagicPH）的 mediaFinder / getVidTitle / geekGifs / geekVideos。
+ * 参考实现：scripts/ph-downloader.js（MagicPH）的 mediaFinder / getVidTitle / geekGifs / geekVideos；
+ * Pornhub 分支另参照用户脚本「Pornhub video download with one click」的 flashvars / mediaDefinitions 读法。
  */
 
 /* eslint-disable @typescript-eslint/no-unused-vars, @typescript-eslint/no-unsafe-function-type */
@@ -224,6 +225,171 @@ function pageSortSources(list: ExtractedSource[]): void {
 }
 
 // ---------------------------------------------------------------------------
+// Pornhub：flashvars_* / mediaDefinitions
+//
+// 参照用户脚本「Pornhub video download with one click」：
+// 1. 页面把播放器配置挂在顶层变量 `flashvars_<id>` 上，其中的 mediaDefinitions 列出
+//    播放器会用到的直链，并另给一条 `remote: true` 的「分辨率清单」端点；
+// 2. 该端点返回 `[{ quality, format, videoUrl }]`，是**全部分辨率**的唯一来源 ——
+//    行内脚本里只有播放器默认那一两条，所以必须真的去拉一次这个端点。
+// ---------------------------------------------------------------------------
+
+/** 从 `{` 开始截取一段括号配平的文本（跳过字符串字面量及其中的转义） */
+function pageBalancedObject(text: string, start: number): string {
+  let depth = 0;
+  let escaped = false;
+  let quote = "";
+  for (let i = start; i < text.length; i += 1) {
+    const char = text.charAt(i);
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = "";
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
+  }
+  return "";
+}
+
+/**
+ * 读取页面的 flashvars 对象。
+ *
+ * 先看运行时全局（`flashvars_<id>` 是顶层 `var`，本来就在 window 上），
+ * 再从行内 `<script>` 里把同样的对象字面量解析出来 —— 后者在脚本未执行、
+ * 或配置由外部文件注入时依然有效，也让提取逻辑可以脱开真实页面做测试。
+ */
+function pageFlashvarsObject(doc: Document): Record<string, unknown> | null {
+  if (typeof window !== "undefined") {
+    const globals = window as unknown as Record<string, unknown>;
+    const keys = Object.keys(globals);
+    for (let i = 0; i < keys.length; i += 1) {
+      const key = keys[i];
+      if (!key || key.indexOf("flashvars_") !== 0) continue;
+      const value = globals[key];
+      if (value && typeof value === "object") return value as Record<string, unknown>;
+    }
+  }
+  const scripts = doc.querySelectorAll("script");
+  for (let i = 0; i < scripts.length; i += 1) {
+    const text = scripts[i]?.textContent;
+    if (!text) continue;
+    const anchor = text.indexOf("flashvars_");
+    if (anchor === -1) continue;
+    const brace = text.indexOf("{", anchor);
+    if (brace === -1) continue;
+    const literal = pageBalancedObject(text, brace);
+    if (!literal) continue;
+    try {
+      const parsed: unknown = JSON.parse(literal);
+      if (parsed && typeof parsed === "object") return parsed as Record<string, unknown>;
+    } catch {
+      /* 这一条不是 JSON，继续找下一个 */
+    }
+  }
+  return null;
+}
+
+/** 读 flashvars 里的字符串字段（数字 / 对象一律忽略） */
+function pageFlashString(source: Record<string, unknown> | null, key: string): string {
+  const value = source ? source[key] : undefined;
+  return typeof value === "string" ? value : "";
+}
+
+/** mediaDefinitions 的 format + 直链 → SourceKind */
+function pageSourceKind(format: string, href: string): SourceKind {
+  if (format === "hls" || /\.m3u8(\?|$|#)/i.test(href)) return "hls";
+  return "progressive";
+}
+
+/** 条目自带的清晰度（"1080" → "1080p"）；没有就从直链文件名里找 */
+function pageSourceQuality(raw: unknown, href: string): string {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  const digits = /^(\d{3,4})$/.exec(text);
+  return digits && digits[1] ? digits[1] + "p" : pageQualityOf(href);
+}
+
+/**
+ * 同步 XHR 拉取 mediaDefinitions 的 remote 端点。
+ *
+ * 必须在**访客页上下文**里发请求：分辨率清单需要页面的 origin / cookie / referer，
+ * 宿主的 fetch 拿不到这些。同步则是为了保持整段提取「注入一次、同步返回」的形状
+ * —— 返回 Promise 会让 executeJavaScript 拿到 Promise 本身而不是结果。
+ * 会短暂阻塞访客页主线程，故只在 flashvars 确实给出 remote 端点时才调用。
+ */
+function pageFetchJsonSync(url: string): unknown {
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url, false);
+    xhr.send();
+    if (xhr.status !== 200) return null;
+    return JSON.parse(xhr.responseText) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/** 分辨率清单（`[{ quality, format, videoUrl }]`）→ sources */
+function pageQualityListSources(list: ExtractedSource[], payload: unknown, base: string): void {
+  if (!Array.isArray(payload)) return;
+  for (let i = 0; i < payload.length; i += 1) {
+    const item = payload[i];
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    const href = pageNormalizeUrl(entry["videoUrl"], base);
+    if (!href) continue;
+    const format = typeof entry["format"] === "string" ? entry["format"].toLowerCase() : "";
+    const kind = pageSourceKind(format, href);
+    const quality = pageSourceQuality(entry["quality"], href);
+    pagePushSource(list, href, kind, pageLabel(kind, quality), quality);
+  }
+}
+
+/** mediaDefinitions：直链逐条收下，`remote: true` 的那条拉清单 */
+function pagePornhubMediaSources(
+  flashvars: Record<string, unknown> | null,
+  list: ExtractedSource[],
+  base: string
+): void {
+  if (!flashvars) return;
+  const definitions = flashvars["mediaDefinitions"];
+  if (!Array.isArray(definitions)) return;
+  let remote = "";
+  for (let i = 0; i < definitions.length; i += 1) {
+    const definition = definitions[i];
+    if (!definition || typeof definition !== "object") continue;
+    const entry = definition as Record<string, unknown>;
+    const href = pageNormalizeUrl(entry["videoUrl"], base);
+    if (!href) continue;
+    if (entry["remote"] === true) {
+      // 指向分辨率清单而不是媒体本身，留到循环外一次性拉取
+      if (!remote) remote = href;
+      continue;
+    }
+    const format = typeof entry["format"] === "string" ? entry["format"].toLowerCase() : "";
+    const kind = pageSourceKind(format, href);
+    const quality = pageSourceQuality(entry["quality"], href);
+    pagePushSource(list, href, kind, pageLabel(kind, quality), quality);
+  }
+  if (remote) pageQualityListSources(list, pageFetchJsonSync(remote), remote);
+}
+
+// ---------------------------------------------------------------------------
 // 策略实现
 // ---------------------------------------------------------------------------
 
@@ -257,9 +423,17 @@ export function extractGeneric(doc: Document, url: string): ExtractResult {
   };
 }
 
-/** Pornhub 策略：解析内联 flashvars_* / mediaDefinitions / VIDEO_SHOW 中的字面量 URL */
+/**
+ * Pornhub 策略：flashvars_* → mediaDefinitions → remote 分辨率清单。
+ *
+ * 字面量扫描（行内脚本 / `<video>` / og:video）保留为兜底：页面结构变动、
+ * flashvars 改名或清单端点不可达时，至少还能拿到播放器当前用的那几条。
+ */
 export function extractPornhub(doc: Document, url: string): ExtractResult {
   const sources: ExtractedSource[] = [];
+  const flashvars = pageFlashvarsObject(doc);
+
+  pagePornhubMediaSources(flashvars, sources, url);
   pageScanScripts(doc, sources, url);
   pageCollectVideoTags(doc, sources, url);
   pageAddAttributeSource(
@@ -268,13 +442,18 @@ export function extractPornhub(doc: Document, url: string): ExtractResult {
     url
   );
   pageSortSources(sources);
-  const inlineTitle = pageScriptMatch(doc, /"video_title"\s*:\s*"([^"]+)"/);
+
+  const inlineTitle =
+    pageFlashString(flashvars, "video_title") ||
+    pageScriptMatch(doc, /"video_title"\s*:\s*"([^"]+)"/);
   return {
     adapterId: "pornhub",
     pageUrl: url,
     title: inlineTitle || pagePickTitle(doc),
     tags: pageSplitTags(pageMetaContent(doc, ["keywords"])),
-    poster: pageMetaContent(doc, ["og:image", "twitter:image"]),
+    poster:
+      pageNormalizeUrl(pageFlashString(flashvars, "image_url"), url) ||
+      pageMetaContent(doc, ["og:image", "twitter:image"]),
     sources,
   };
 }
@@ -330,4 +509,12 @@ export const PAGE_HELPER_POOL: readonly Function[] = [
   pageJsonLdContentUrl,
   pageJsonLdThumbnail,
   pageSortSources,
+  pageBalancedObject,
+  pageFlashvarsObject,
+  pageFlashString,
+  pageSourceKind,
+  pageSourceQuality,
+  pageFetchJsonSync,
+  pageQualityListSources,
+  pagePornhubMediaSources,
 ];
